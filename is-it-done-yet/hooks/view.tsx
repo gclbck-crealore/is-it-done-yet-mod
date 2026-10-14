@@ -110,6 +110,7 @@ export function renderPane(el: El, d: ViewData, act: ViewActions) {
     )
   }
 
+  const count = `· ${s.total} ${s.total === 1 ? 'task' : 'tasks'}`
   const tk = d.tokens
   const eta = s.allDone ? 'done ✓' : s.etaMs === null ? '—' : fmtEta(s.etaMs)
 
@@ -128,8 +129,12 @@ export function renderPane(el: El, d: ViewData, act: ViewActions) {
   return (
     <Box flexDirection="column" paddingX={1}>
       <Text bold wrap="truncate-end">◆ {d.goal}</Text>
-      <Text dimColor wrap="truncate-end">{d.source === 'plan' ? '≡' : '⚙'} {d.sourceLabel} · {s.total} {s.total === 1 ? 'task' : 'tasks'}</Text>
-      {d.other ? <Button key="switch" label={`⇄ ${d.other.label} (${d.other.count})`} plain dimColor onPress={act.switchSource} /> : null}
+      <Box flexDirection="row" gap={1}>
+        <Text dimColor>{d.source === 'plan' ? '≡' : '⚙'}</Text>
+        <Text bold>{fit(d.sourceLabel, Math.max(8, d.columns - 7 - count.length))}</Text>
+        <Text dimColor>{count}</Text>
+        {d.other ? <Button key="switch" label="⇄" plain dimColor onPress={act.switchSource} /> : null}
+      </Box>
       <Box flexDirection="row" gap={1}>
         {bar(s.done, s.active, s.total, width)}
         <Text bold>{s.pct}%</Text>

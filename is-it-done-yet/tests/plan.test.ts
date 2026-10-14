@@ -266,7 +266,8 @@ describe('the project plan in the pane', () => {
     for (const surface of ['terminal', 'desktop'] as const) {
       const ui = await $.ui.mount(pane(surface))
       expect(await ui.find({ type: 'Text', text: /^40%$/ })).toBeDefined()
-      expect(await ui.find({ type: 'Text', text: /≡ zeta\.md · 5 tasks/ })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /^zeta\.md$/ })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /^· 5 tasks$/ })).toBeDefined()
       expect(await ui.find({ type: 'Button', key: 'phase-02' })).toBeDefined()
       expect(await ui.find({ type: 'Text', text: /▶ Auth module/ })).toBeDefined()
       await ui.unmount()
@@ -292,7 +293,8 @@ describe('the project plan in the pane', () => {
     project(on, files({ 'a-notes.md': { text: NOTES, mtimeMs: 10 }, 'b-doc.md': { text: TRACKER, mtimeMs: 10 }, 'c-readme.md': { text: '# Hello\n\nNo list here.\n', mtimeMs: 10 } }))
     await $.session.start(start)
     const ui = await $.ui.mount(pane())
-    expect(await ui.find({ type: 'Text', text: /≡ b-doc\.md · 3 tasks/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^b-doc\.md$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^· 3 tasks$/ })).toBeDefined()
   })
 
   test('same list, newer file: the one whose title says plan wins over one titled architecture', async ($, on) => {
@@ -301,7 +303,8 @@ describe('the project plan in the pane', () => {
     project(on, files({ 'older.md': { text: `# Project plan\n\n${body}`, mtimeMs: 10 }, 'newer.md': { text: `# Architecture overview\n\n${body}`, mtimeMs: 20 } }))
     await $.session.start(start)
     const ui = await $.ui.mount(pane())
-    expect(await ui.find({ type: 'Text', text: /≡ older\.md · 6 tasks/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^older\.md$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^· 6 tasks$/ })).toBeDefined()
   })
 
   test('files in folders are found, dependencies and one-item lists are not', async ($, on) => {
@@ -316,7 +319,8 @@ describe('the project plan in the pane', () => {
     )
     await $.session.start(start)
     const ui = await $.ui.mount(pane())
-    expect(await ui.find({ type: 'Text', text: /≡ docs\/deep\/roadmap-x\.md · 2 tasks/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^docs\/deep\/roadmap-x\.md$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^· 2 tasks$/ })).toBeDefined()
   })
 
   test('a plan that is a link out of the project folder is not read', async ($, on) => {
@@ -332,7 +336,7 @@ describe('the project plan in the pane', () => {
     project(on, files({ 'big.md': { text: `# Plan\n${'- [ ] item\n'.repeat(40_000)}`, mtimeMs: 10 }, 'small.md': { text: TRACKER, mtimeMs: 5 } }))
     await $.session.start(start)
     const ui = await $.ui.mount(pane())
-    expect(await ui.find({ type: 'Text', text: /≡ small\.md/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^small\.md$/ })).toBeDefined()
   })
 
   test('ticking a box in the file shows up after the next turn', async ($, on) => {
@@ -366,11 +370,13 @@ describe('the project plan in the pane', () => {
     expect((await $.command.run(run('plan ../secret.md'))).text).toMatch(/not a readable file inside this project/)
     expect((await $.command.run(run('plan notes.md'))).text).toMatch(/no checkbox items/)
     const ui = await $.ui.mount(pane())
-    expect(await ui.find({ type: 'Text', text: /≡ docs\/mine\.md · 2 tasks/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^docs\/mine\.md$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^· 2 tasks$/ })).toBeDefined()
     await ui.unmount()
     expect((await $.command.run(run('plan auto'))).text).toMatch(/on its own again/)
     const again = await $.ui.mount(pane())
-    expect(await again.find({ type: 'Text', text: /≡ a\.md · 3 tasks/ })).toBeDefined()
+    expect(await again.find({ type: 'Text', text: /^a\.md$/ })).toBeDefined()
+    expect(await again.find({ type: 'Text', text: /^· 3 tasks$/ })).toBeDefined()
   })
 
   test('the button walks through the candidates, then the session tasks, then round', async ($, on) => {
@@ -379,14 +385,18 @@ describe('the project plan in the pane', () => {
     await $.session.start(start)
     await $.tool.call({ tool: 'TaskCreate', subject: 'Phase 1: only task', description: 'x' })
     const ui = await $.ui.mount(pane())
-    expect(await ui.find({ type: 'Text', text: /≡ a\.md · 3 tasks/ })).toBeDefined()
-    expect(await ui.find({ type: 'Button', text: /b\.md \(2\)/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^a\.md$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^· 3 tasks$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Button', key: 'switch', label: '⇄' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^b\.md$/ })).toBeUndefined()
     await ui.press({ key: 'switch' })
-    expect(await ui.find({ type: 'Text', text: /≡ b\.md · 2 tasks/ })).toBeDefined()
-    expect(await ui.find({ type: 'Button', text: /Session tasks \(1\)/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^b\.md$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^· 2 tasks$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Button', key: 'switch', label: '⇄' })).toBeDefined()
     await ui.press({ key: 'switch' })
-    expect(await ui.find({ type: 'Text', text: /⚙ Session tasks · 1 task/ })).toBeDefined()
-    expect(await ui.find({ type: 'Button', text: /a\.md \(3\)/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Session tasks$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^· 1 task$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Button', key: 'switch', label: '⇄' })).toBeDefined()
   })
 
   test('a mod loaded mid-session rebuilds the task list from the transcript', async ($, on) => {
@@ -402,7 +412,8 @@ describe('the project plan in the pane', () => {
     await $.session.start(start)
     const ui = await $.ui.mount(pane())
     expect(await ui.find({ type: 'Text', text: /^50%$/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /⚙ Session tasks · 2 tasks/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Session tasks$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^· 2 tasks$/ })).toBeDefined()
   })
 
   test('a project with a plan opens the pane at startup; autoOpen off does not', async ($, on) => {
