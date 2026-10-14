@@ -31,15 +31,18 @@ The labels are plain strings in `is-it-done-yet/hooks/view.tsx` if you want to c
 
 ## Install
 
+From the Crealore mods marketplace (it also carries [session-handoff-button](https://github.com/gclbck-crealore/session-handoff-button-mod)):
+
+```sh
+claude plugin marketplace add gclbck-crealore/gclbck-crealore-mods
+claude plugin install is-it-done-yet@gclbck-crealore-mods
+```
+
+Or, from this repository alone:
+
 ```sh
 claude plugin marketplace add gclbck-crealore/is-it-done-yet-mod
 claude plugin install is-it-done-yet@is-it-done-yet-mod
-```
-
-Or from inside a session, in one step:
-
-```
-/plugin install is-it-done-yet --marketplace gclbck-crealore/is-it-done-yet-mod
 ```
 
 Then run `/reload-plugins` in an open session, or start a new one. (The installer may say one option is "not yet set": that is `autoOpen`, which defaults to on, so you can ignore it.)
@@ -146,7 +149,7 @@ The code is a few small files in `is-it-done-yet/hooks/`: `model.ts` (tasks, pha
 ## Uninstall
 
 ```sh
-claude plugin uninstall is-it-done-yet@is-it-done-yet-mod
+claude plugin uninstall is-it-done-yet@gclbck-crealore-mods
 ```
 
 or disable it in `/plugin`. It leaves one small store key per session and one per pinned project, which expire on their own.

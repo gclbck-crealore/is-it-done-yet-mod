@@ -39,7 +39,7 @@ Reach L1, reads (reads files, reads the transcript, persists state, draws).
 
 ## Install
 
-One session: `claude --plugin-dir ./is-it-done-yet`. To keep it: `claude plugin marketplace add gclbck-crealore/is-it-done-yet-mod`, then `claude plugin install is-it-done-yet@is-it-done-yet-mod` (or `/plugin install is-it-done-yet --marketplace gclbck-crealore/is-it-done-yet-mod` in a session), then run `/reload-plugins` in an open session. Installed copies are cached by version: bump `version` before reinstalling.
+One session: `claude --plugin-dir ./is-it-done-yet`. To keep it: `claude plugin marketplace add gclbck-crealore/gclbck-crealore-mods`, then `claude plugin install is-it-done-yet@gclbck-crealore-mods` (this repository is also a marketplace of its own: `gclbck-crealore/is-it-done-yet-mod`), then run `/reload-plugins` in an open session. Installed copies are cached by version: bump `version` before reinstalling.
 
 ## Options
 autoOpen: open the pane by itself when a plan file is found at startup and the first time the agent creates a task, when the terminal is wide enough (144 columns, or 110 once you have opened it yourself); default on. `/progress` always works at any width. Stored under `pluginConfigs` in settings; a change reloads the mod.
