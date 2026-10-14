@@ -7,9 +7,10 @@ import {
   fmtUsd,
   groups,
   isOpen,
+  labelOf,
   stats,
-  titleOf,
   totalTokens,
+  type Group,
   type Task,
   type Tokens,
 } from './model.js'
@@ -71,6 +72,44 @@ export function renderPane(el: El, d: ViewData, act: ViewActions) {
     </Box>
   )
 
+
+  // A phase, and inside it whatever the plan groups below: a heading line, the bar and count of that group
+  // (finished ones fold to just these two lines), then its tasks and sub-groups when open. Flattened to rows
+  // first, so the tree needs no recursive element.
+  type Row = { kind: 'group'; g: Group; level: number; open: boolean } | { kind: 'task'; t: Task; level: number }
+  const rows = (g: Group, siblings: readonly Group[], level: number): Row[] => {
+    const open = isOpen(g, siblings, level, d.expanded)
+    const out: Row[] = [{ kind: 'group', g, level, open }]
+    if (!open) return out
+    for (const t of g.direct) out.push({ kind: 'task', t, level })
+    for (const c of g.children) out.push(...rows(c, g.children, level + 1))
+    return out
+  }
+  const fit = (text: string, room: number) => (text.length > room ? `${text.slice(0, Math.max(1, room - 1))}…` : text)
+  const line = (r: Row) => {
+    const pad = 2 * (r.level - 1)
+    if (r.kind === 'task') {
+      return (
+        <Box paddingLeft={pad + 2}>
+          <Text color={COLOR[r.t.status]} bold={r.t.status === 'in_progress'} wrap="truncate-end">
+            {ICON[r.t.status]} {labelOf(r.t)}
+          </Text>
+        </Box>
+      )
+    }
+    const { g } = r
+    const mark = g.done === g.tasks.length ? '✓' : g.active > 0 ? '●' : '○'
+    return (
+      <Box flexDirection="column" paddingLeft={pad}>
+        <Button key={`phase-${g.key}`} label={`${r.open ? '▾' : '▸'} ${mark} ${fit(g.label, Math.max(10, d.columns - 8 - pad))}`} plain onPress={() => act.toggle(g.key, !r.open)} />
+        <Box flexDirection="row" gap={1} paddingLeft={2}>
+          {bar(g.done, g.active, g.tasks.length, Math.min(width, 12))}
+          <Text dimColor>{g.done}/{g.tasks.length}</Text>
+        </Box>
+      </Box>
+    )
+  }
+
   const tk = d.tokens
   const eta = s.allDone ? 'done ✓' : s.etaMs === null ? '—' : fmtEta(s.etaMs)
 
@@ -109,27 +148,7 @@ export function renderPane(el: El, d: ViewData, act: ViewActions) {
       {stat('Token', fmtTokens(totalTokens(tk)), `out ${fmtTokens(tk.output)}`)}
       {stat('API', fmtUsd(d.costUsd), 'at API prices')}
       <Text> </Text>
-      {all.map(g => {
-        const open = isOpen(g, all, d.expanded)
-        return (
-          <Box flexDirection="column">
-            <Box flexDirection="row" gap={1}>
-              <Button key={`phase-${g.key}`} label={`${open ? '▾' : '▸'} ${g.label}`} plain onPress={() => act.toggle(g.key, !open)} />
-              {bar(g.done, g.active, g.tasks.length, 8)}
-              <Text dimColor>{g.done}/{g.tasks.length}</Text>
-            </Box>
-            {open
-              ? g.tasks.map(t => (
-                  <Box paddingLeft={2}>
-                    <Text color={COLOR[t.status]} bold={t.status === 'in_progress'} wrap="truncate-end">
-                      {ICON[t.status]} {titleOf(t.subject)}
-                    </Text>
-                  </Box>
-                ))
-              : null}
-          </Box>
-        )
-      })}
+      {all.flatMap(g => rows(g, all, 1)).map(line)}
       <Text> </Text>
       <Button key="close" label="✕ Close" plain dimColor onPress={act.close} />
     </Box>

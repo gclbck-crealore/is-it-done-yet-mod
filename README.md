@@ -21,7 +21,7 @@ It is a Claude Code **mod** (a plugin that draws and reacts inside the CLI itsel
 | **Goal** and a **percent bar** | The overall run: `████████░░░░░░  40%  6/15`. |
 | 🟩 green / 🟦 blue / ⬜ grey | Done / in progress / not started. Counts for each sit under the bar. |
 | `▶ Cart and checkout flow` | The task being worked on right now, or `→ Next: …` when nothing is marked in progress. |
-| **Phases** | One accordion section per phase, each with its own bar. Press a header to open or close it. The section with active work opens by itself. |
+| **Phases** | One section per phase, always with its own bar and count, and whatever the plan groups below it (waves, sub-sections, parent tasks) the same way. Finished ones fold to their bar; a section with work under way opens by itself, and a press on a header opens or closes any of them. |
 | **Session / Elapsed** | Time since this session started (plan view), or since the first task was created (task-list view). |
 | **Left** | A rough ETA from what *this session* got done: elapsed ÷ tasks finished since you started × tasks left. Hidden until something has been finished in this session. |
 | **Token** | Total tokens used this session (input, output and cache), with the output share beside it. |
@@ -105,6 +105,18 @@ It understands:
 | API   | 🔄 In progress   |
 | UI    | ⬜ Todo          |
 ````
+
+A table can be one per phase, with a free-text status. Any wording is read (`CLEAN, merged`, `CLOSED`, `done`, `review r1 running`, `dispatched`, `not started`, English or Turkish), the first column is the task, a scope or description column is shown beside it, and a `Wave` / `Group` column nests the tasks one level down:
+
+````markdown
+## Phase 3: inbound mail
+| Task  | Wave | Scope        | Status                |
+|-------|------|--------------|-----------------------|
+| p3-t1 | A    | providers    | CLEAN r11, merged     |
+| p3-t3 | B    | intake       | dispatched            |
+````
+
+The grouping is whatever the file does: headings, nested checkboxes and table columns are read as levels (phase → wave → task, task → sub-task), up to three deep.
 
 When the agent ticks a box in the file, the pane picks it up after the next turn (and every 30 seconds while it is open). A file needs at least two items to count; it is skipped above 256 KB. If the guess is wrong, press ⇄, or run `/progress plan <file>` to follow a specific one.
 

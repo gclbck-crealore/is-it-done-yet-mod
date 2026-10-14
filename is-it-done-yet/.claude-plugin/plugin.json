@@ -1,6 +1,6 @@
 {
   "name": "is-it-done-yet",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A docked progress pane for long, multi-phase agent work. Looks through the markdown files of the project for a plan, checklist or progress note (judged by content, not file name) or uses the session's task list, and shows percent done, phases and tasks with bars, elapsed time, a rough ETA, tokens used and the API-equivalent cost. Adds nothing to the model's context.",
   "author": {
     "name": "Crealore",

@@ -7,6 +7,10 @@ export type Task = {
   status: Status
   phase: string
   phaseTitle: string
+  // Group names below the phase (wave, sub-section, parent task), outermost first.
+  sub?: string[]
+  // True for a line read from a plan file: its text is the file's own, so no "P2:" prefix is stripped from it.
+  raw?: true
   startedAt: number
   doneAt: number
 }
@@ -34,7 +38,8 @@ export type Stats = {
   allDone: boolean
 }
 
-export type Group = { key: string; label: string; tasks: Task[]; done: number; active: number }
+// `tasks` is every task under the group, `direct` those that sit in it with no group of their own below.
+export type Group = { key: string; label: string; tasks: Task[]; direct: Task[]; children: Group[]; done: number; active: number }
 
 export const EMPTY_TOKENS: Tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
 
@@ -56,6 +61,11 @@ export function parsePhase(subject: string, metaPhase?: unknown): { phase: strin
 
 export function titleOf(subject: string): string {
   return parsePhase(subject).title
+}
+
+// What to show for a task: a plan file's text as written, a session task without its phase prefix.
+export function labelOf(t: Task): string {
+  return t.raw ? t.subject : titleOf(t.subject)
 }
 
 export function clip(s: string): string {
@@ -162,8 +172,8 @@ export function stats(tasks: readonly Task[], startedAt: number, now: number, ba
     pct: total === 0 ? 0 : Math.round((done / total) * 100),
     elapsedMs,
     etaMs,
-    current: cur ? cur.active || titleOf(cur.subject) : '',
-    next: nxt ? titleOf(nxt.subject) : '',
+    current: cur ? cur.active || labelOf(cur) : '',
+    next: nxt ? labelOf(nxt) : '',
     allDone,
   }
 }
@@ -175,6 +185,26 @@ function phaseOrder(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0
 }
 
+function node(key: string, label: string, list: Task[], depth: number): Group {
+  const direct: Task[] = []
+  const byChild = new Map<string, Task[]>()
+  for (const t of list) {
+    const name = t.sub?.[depth - 1]
+    if (name === undefined || name === '') direct.push(t)
+    else byChild.set(name, [...(byChild.get(name) ?? []), t])
+  }
+  return {
+    key,
+    label,
+    tasks: list,
+    direct,
+    children: [...byChild].map(([name, l]) => node(`${key}/${name}`, name, l, depth + 1)),
+    done: list.filter(t => t.status === 'completed').length,
+    active: list.filter(t => t.status === 'in_progress').length,
+  }
+}
+
+// The tasks as a tree: phases, then whatever the plan groups below them (waves, sub-sections, parent tasks).
 export function groups(tasks: readonly Task[]): Group[] {
   const byKey = new Map<string, Task[]>()
   for (const t of tasks) {
@@ -186,24 +216,19 @@ export function groups(tasks: readonly Task[]): Group[] {
   if (byKey.has('')) keys.push('')
   return keys.map(key => {
     const list = byKey.get(key) as Task[]
-    return {
-      key,
-      label: list.find(t => t.phaseTitle !== '')?.phaseTitle ?? (key === '' ? 'Tasks' : `Phase ${key}`),
-      tasks: list,
-      done: list.filter(t => t.status === 'completed').length,
-      active: list.filter(t => t.status === 'in_progress').length,
-    }
+    return node(key, list.find(t => t.phaseTitle !== '')?.phaseTitle ?? (key === '' ? 'Tasks' : `Phase ${key}`), list, 1)
   })
 }
 
-// An accordion section is open when the person said so; otherwise when work is happening in it,
-// it is the first unfinished one, or it is the only one.
-export function isOpen(g: Group, all: readonly Group[], explicit: Record<string, boolean>): boolean {
+// A section is open when the person said so, or when work is happening in it. Of the top-level phases, the first
+// unfinished one is open too, and a finished one is folded to its bar; below a phase, whatever is unfinished is.
+export function isOpen(g: Group, siblings: readonly Group[], level: number, explicit: Record<string, boolean>): boolean {
   const said = explicit[g.key]
   if (said !== undefined) return said
-  if (all.length === 1 || g.active > 0) return true
-  const firstUnfinished = all.find(x => x.done < x.tasks.length)
-  return firstUnfinished?.key === g.key
+  if (g.active > 0) return true
+  if (level > 1) return g.done < g.tasks.length
+  if (siblings.length === 1) return true
+  return siblings.find(x => x.done < x.tasks.length)?.key === g.key
 }
 
 export function barCells(done: number, active: number, total: number, width: number): [number, number, number] {

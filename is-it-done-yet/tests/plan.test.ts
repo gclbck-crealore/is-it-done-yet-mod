@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { pickSource, stats, type Task } from '../hooks/model.js'
+import { groups, isOpen, pickSource, stats, type Task } from '../hooks/model.js'
 import { parsePlan, rebuildFromTranscript, scorePlan } from '../hooks/plan.js'
 import { PANE, project, run, start, world, type PlanFile } from './helpers.js'
 
@@ -38,6 +38,39 @@ const TABLE = `## Status
 | Old | ❌ Cancelled |
 `
 
+
+// A board as an orchestrating agent keeps it: a table per phase, free-text statuses, a wave column in some,
+// a row that sums the phase up.
+const BOARD = `# BOARD — task board
+
+## Phase 0 — skeleton (start SHA e26e20f)
+| Task | Scope | Status |
+|---|---|---|
+| p0-t1 | scaffold, lint | CLEAN r3, merged 3c70f1b |
+| p0-t2 | core, ports | CLEAN r8, merged 734430d |
+| **Phase 0** | gate: verify:all 8/8 | **CLOSED** |
+| docs | FLOW_MAP, DECISIONS | done (b666f8e) |
+
+## Phase 2 — staff panel (base = p1 ae474dc; merges after Phase 1 closes)
+| Task | Scope | Status |
+|---|---|---|
+| p2-t1 | staff SSO | CLEAN r16 (1fdd998); merge after Phase 1 closes |
+| p2-t2 | admin screens | committed 189e028 (verify:all PASS); review r1 running |
+| p2-t3 | assignment | not started |
+
+## Phase 3 — inbound mail
+| Task | Wave | Scope | Status |
+|---|---|---|---|
+| p3-t1 | A | providers | **CLEAN** r11 → merged |
+| p3-t2 | A | mail adapter | CLOSED at e743a1f |
+| p3-t3 | B | intake decisions | dispatched (BASE b69fc6f) |
+| p3-t4 | B | outbound core | planned |
+| p3-t5 | — | scenario | skipped |
+
+## Later phases
+- P4: adapters
+`
+
 const files = (entries: Record<string, PlanFile>) => new Map(Object.entries(entries))
 
 const task = (status: Task['status'], doneAt = 0): Task => ({ id: 'x', subject: 'x', active: '', status, phase: '', phaseTitle: '', startedAt: 0, doneAt })
@@ -73,6 +106,82 @@ describe('parsePlan', () => {
 
   test('prose with no checkbox and no status table is not a plan', () => {
     expect(parsePlan('# Notes\n\nSome words.\n- a bullet\n')).toEqual([])
+  })
+})
+
+describe('plan tables written by an agent', () => {
+  test('free-text statuses are read, a phase summary row is not a task, the id stays whole', () => {
+    expect(parsePlan(BOARD).map(t => [t.subject, t.status, t.phaseTitle])).toEqual([
+      ['p0-t1 · scaffold, lint', 'completed', 'Phase 0 — skeleton'],
+      ['p0-t2 · core, ports', 'completed', 'Phase 0 — skeleton'],
+      ['docs · FLOW_MAP, DECISIONS', 'completed', 'Phase 0 — skeleton'],
+      ['p2-t1 · staff SSO', 'completed', 'Phase 2 — staff panel'],
+      ['p2-t2 · admin screens', 'in_progress', 'Phase 2 — staff panel'],
+      ['p2-t3 · assignment', 'pending', 'Phase 2 — staff panel'],
+      ['p3-t1 · providers', 'completed', 'Phase 3 — inbound mail'],
+      ['p3-t2 · mail adapter', 'completed', 'Phase 3 — inbound mail'],
+      ['p3-t3 · intake decisions', 'in_progress', 'Phase 3 — inbound mail'],
+      ['p3-t4 · outbound core', 'pending', 'Phase 3 — inbound mail'],
+    ])
+  })
+
+  test('a Wave column nests tasks one level below their phase, each level with its own count', () => {
+    const tree = groups(parsePlan(BOARD))
+    expect(tree.map(g => [g.label, g.done, g.tasks.length])).toEqual([
+      ['Phase 0 — skeleton', 3, 3],
+      ['Phase 2 — staff panel', 1, 3],
+      ['Phase 3 — inbound mail', 2, 4],
+    ])
+    const p3 = tree[2]
+    expect(p3?.children.map(g => [g.label, g.done, g.active, g.tasks.length])).toEqual([
+      ['Wave A', 2, 0, 2],
+      ['Wave B', 0, 1, 2],
+    ])
+    expect(p3?.direct).toEqual([])
+  })
+
+  test('a finished phase is folded to its bar; phases with work under way and their unfinished waves are open', () => {
+    const tree = groups(parsePlan(BOARD))
+    expect(tree.map(g => isOpen(g, tree, 1, {}))).toEqual([false, true, true])
+    const waves = tree[2]?.children ?? []
+    expect(waves.map(g => isOpen(g, waves, 2, {}))).toEqual([false, true])
+    expect(isOpen(tree[0] as never, tree, 1, { [tree[0]?.key ?? '']: true })).toBe(true)
+  })
+
+  test('parenthesised notes in a heading do not reach the phase name', () => {
+    expect(parsePlan(BOARD).every(t => !t.phaseTitle.includes('('))).toBe(true)
+  })
+
+  test('headings below a phase and nested checkboxes nest the same way', () => {
+    const doc = `# Plan\n\n## Phase 1\n### Backend\n- [x] API\n- [ ] Auth\n  - [x] login\n  - [ ] logout\n### UI\n- [ ] Shell\n\n## Phase 2\n- [ ] Ship\n`
+    const tasks = parsePlan(doc)
+    expect(tasks.map(t => [t.subject, t.phaseTitle, t.sub])).toEqual([
+      ['API', 'Phase 1', ['Backend']],
+      ['login', 'Phase 1', ['Backend', 'Auth']],
+      ['logout', 'Phase 1', ['Backend', 'Auth']],
+      ['Shell', 'Phase 1', ['UI']],
+      ['Ship', 'Phase 2', []],
+    ])
+    const p1 = groups(tasks)[0]
+    expect(p1?.children.map(g => [g.label, g.tasks.length, g.children.map(c => c.label)])).toEqual([
+      ['Backend', 3, ['Auth']],
+      ['UI', 1, []],
+    ])
+  })
+
+  test('one heading around every phase is not a group of its own', () => {
+    const doc = '# T\n## Plan\n### Phase 1\n- [x] a\n### Phase 2\n- [ ] b\n'
+    expect(parsePlan(doc).map(t => [t.subject, t.phaseTitle, t.sub])).toEqual([
+      ['a', 'Phase 1', []],
+      ['b', 'Phase 2', []],
+    ])
+  })
+
+  test('a plan task named like a phase prefix keeps its text', () => {
+    const tasks = parsePlan(BOARD)
+    const t = tasks.find(x => x.subject.startsWith('p2-t1'))
+    expect(t?.raw).toBe(true)
+    expect(stats(tasks, 0, 0).current).toBe('p2-t2 · admin screens')
   })
 })
 
@@ -162,6 +271,20 @@ describe('the project plan in the pane', () => {
       expect(await ui.find({ type: 'Text', text: /▶ Auth module/ })).toBeDefined()
       await ui.unmount()
     }
+  })
+
+  test('every phase shows its bar and count, finished ones folded; waves and tasks show inside the open ones', async ($, on) => {
+    world(on)
+    project(on, files({ 'board.md': { text: BOARD, mtimeMs: 10 } }))
+    await $.session.start(start)
+    const ui = await $.ui.mount(pane())
+    for (const key of ['phase-01', 'phase-02', 'phase-03', 'phase-03/Wave A', 'phase-03/Wave B']) expect(await ui.find({ type: 'Button', key })).toBeDefined()
+    for (const count of [/^3\/3$/, /^1\/3$/, /^2\/4$/]) expect(await ui.find({ type: 'Text', text: count })).toBeDefined()
+    expect(await ui.find({ type: 'Button', label: /✓ Phase 0 — skeleton$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /p0-t1/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /● p2-t2 · admin screens/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /○ p3-t4 · outbound core/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /▶ p2-t2 · admin screens/ })).toBeDefined()
   })
 
   test('among several markdown files the one that reads like a tracker is followed', async ($, on) => {

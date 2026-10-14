@@ -8,6 +8,8 @@ declare module 'claude-code' {
         status: 'pending' | 'in_progress' | 'completed'
         phase: string
         phaseTitle: string
+        sub?: string[]
+        raw?: true
         startedAt: number
         doneAt: number
       }>
@@ -26,6 +28,8 @@ declare module 'claude-code' {
         status: 'pending' | 'in_progress' | 'completed'
         phase: string
         phaseTitle: string
+        sub?: string[]
+        raw?: true
         startedAt: number
         doneAt: number
       }>
