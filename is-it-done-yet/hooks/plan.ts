@@ -6,6 +6,15 @@ const MAX_TASKS = 400
 const BOX = /^(\s*)(?:[-*+]|\d+[.)])\s+\[([ xX~/>.\-])\]\s+(.*\S)\s*$/
 const HEAD = /^(#{1,6})\s+(.*?)\s*#*\s*$/
 
+// "- ✅ text", "1. 🔄 text", "- [WIP] text": a status written as a symbol or tag instead of a checkbox
+const TAG = /^(\s*)(?:[-*+]|\d+[.)])\s+(?:\*\*)?(✅|☑\uFE0F?|✔\uFE0F?|🟢|🔄|⏳|🚧|🟡|⬜|☐|🔲|⏸\uFE0F?|📋|❌|\[(?:done|todo|wip|doing|in progress|open)\])(?:\*\*)?\s*[:\-–—]?\s*(.*\S)\s*$/iu
+const TAG_MARK: Record<string, string> = {
+  '✅': 'x', '☑': 'x', '✔': 'x', '🟢': 'x', '[done]': 'x',
+  '🔄': '~', '⏳': '~', '🚧': '~', '🟡': '~', '[wip]': '~', '[doing]': '~', '[in progress]': '~',
+  '⬜': ' ', '☐': ' ', '🔲': ' ', '⏸': ' ', '📋': ' ', '[todo]': ' ', '[open]': ' ',
+  '❌': '-',
+}
+
 type Item = { indent: number; mark: string; text: string; head: number }
 type Head = { level: number; text: string; own: number }
 
@@ -52,8 +61,10 @@ function parseCheckboxes(lines: readonly string[]): Task[] {
       continue
     }
     const b = BOX.exec(raw)
-    if (b) {
-      items.push({ indent: width(b[1] as string), mark: b[2] as string, text: b[3] as string, head: heads.length - 1 })
+    const t = b ? null : TAG.exec(raw)
+    const found = b ? { indent: b[1] as string, mark: b[2] as string, text: b[3] as string } : t ? { indent: t[1] as string, mark: TAG_MARK[(t[2] as string).replace(/\uFE0F/g, '').toLowerCase()] ?? ' ', text: t[3] as string } : null
+    if (found) {
+      items.push({ indent: width(found.indent), mark: found.mark, text: found.text, head: heads.length - 1 })
       const last = heads[heads.length - 1]
       if (last) last.own += 1
     }
@@ -201,4 +212,76 @@ export function rebuildFromTranscript(messages: readonly { toolUses: readonly Us
     }
   }
   return tasks
+}
+
+
+// ---- which markdown file is the project's plan? Judged by what the file says, never by what it is called ----
+
+const word = (alts: string[]) => new RegExp(`(?<![\\p{L}\\p{N}])(?:${alts.join('|')})(?![\\p{L}\\p{N}])`, 'iu')
+
+// What a plan, a progress note or a task list talks about, in English and Turkish.
+const INTENT: RegExp[] = [
+  word(['plans?', 'planning', 'roadmap', 'milestones?', 'phases?', 'sprints?', 'schedule', 'timeline', 'yol haritası', 'planı', 'planlar\\p{L}*', 'aşama\\p{L}*', 'faz', 'fazlar', 'fazı']),
+  word(['to-?do', 'tasks?', 'checklist', 'backlog', 'action items', 'next steps', 'deliverables?', 'kontrol listesi', 'yapılacak\\p{L}*', 'görev\\p{L}*']),
+  word(['progress', 'status', 'tracker', 'tracking', 'completed', 'remaining', 'done', 'ilerleme\\p{L}*', 'durum\\p{L}*', 'tamamlan\\p{L}*', 'kalan\\p{L}*']),
+  word(['goals?', 'objectives?', 'acceptance criteria', 'definition of done', 'scope', 'hedef\\p{L}*', 'kapsam\\p{L}*']),
+]
+// Documents that often hold checkboxes but are not what is being worked through.
+const NOT_A_PLAN = word(['reviews?', 'audit\\p{L}*', 'changelog', 'architecture', 'readme', 'retrospective', 'report', 'score', 'facts', 'decisions?', 'notes'])
+
+export type Reading = { title: string; head: string; headings: string[] }
+
+// The title and the first few lines say what a document is for; the headings say what it is made of.
+export function readHead(markdown: string): Reading {
+  const lines = markdown.split(/\r?\n/)
+  let i = 0
+  if (lines[0]?.trim() === '---') {
+    const end = lines.findIndex((l, k) => k > 0 && l.trim() === '---')
+    if (end > 0) i = end + 1
+  }
+  const headings: string[] = []
+  const first: string[] = []
+  let title = ''
+  let fenced = false
+  for (; i < lines.length; i += 1) {
+    const raw = lines[i] as string
+    if (/^\s*(```|~~~)/.test(raw)) {
+      fenced = !fenced
+      continue
+    }
+    if (fenced) continue
+    const h = HEAD.exec(raw)
+    if (h) {
+      const text = cleanTitle(h[2] as string)
+      if (title === '') title = text
+      if (headings.length < 60) headings.push(text)
+    }
+    if (first.length < 4 && raw.trim() !== '') first.push(cleanTitle(raw.replace(/^[#>\s]+/, '')))
+  }
+  return { title: title !== '' ? title : (first[0] ?? ''), head: first.join(' \n '), headings }
+}
+
+export type Scored = { score: number; title: string }
+
+// A file with several trackable items is a candidate; this orders the candidates. Content decides: how many
+// items, whether some are done and some not, whether its title and first lines talk about a plan, progress
+// or tasks, whether its headings do, and how recently it was touched.
+export function scorePlan(markdown: string, tasks: readonly Task[], mtimeMs: number, now: number): Scored {
+  const r = readHead(markdown)
+  const n = tasks.length
+  const done = tasks.filter(t => t.status === 'completed').length
+  const active = tasks.filter(t => t.status === 'in_progress').length
+  let score = Math.min(n, 30)
+  if (done > 0 && done < n) score += 15
+  if (active > 0) score += 8
+  const rest = r.head.split(' \n ').slice(1).join(' ')
+  for (const g of INTENT) {
+    if (g.test(r.title)) score += 18
+    else if (g.test(rest)) score += 10
+  }
+  score += Math.min(10, 2 * r.headings.filter(h => INTENT.some(g => g.test(h))).length)
+  const ageDays = Math.max(0, now - mtimeMs) / 86_400_000
+  score += Math.max(0, 10 - ageDays)
+  if (NOT_A_PLAN.test(r.title)) score -= 15
+  return { score: Math.round(score * 10) / 10, title: r.title }
 }

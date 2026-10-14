@@ -29,6 +29,7 @@ declare module 'claude-code' {
         startedAt: number
         doneAt: number
       }>
+      planCands: Array<{ path: string; title: string; total: number; done: number; score: number }>
       planBase: number
       view: 'auto' | 'plan' | 'live'
       lastScan: number

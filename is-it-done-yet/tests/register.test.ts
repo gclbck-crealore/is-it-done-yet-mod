@@ -100,7 +100,7 @@ describe('is-it-done-yet', () => {
     await pane.unmount()
     await $.command.run(run('reset'))
     pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await pane.find({ type: 'Text', text: /No plan file found/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /No plan or task list found/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /◆ demo/ })).toBeDefined()
   })
 

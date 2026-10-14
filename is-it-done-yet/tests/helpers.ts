@@ -53,29 +53,43 @@ export function world(on: On, costUsd = 0, entries: Record<string, unknown> = {}
 
 export type PlanFile = { text: string; mtimeMs: number; real?: string }
 
-// A project folder in memory: `files` is what fs.stat, fs.read and fs.list answer from. The engine hands the
-// stubs absolute paths, so a file is matched by the end of the path; a path that matches nothing is the folder itself.
-export function project(on: On, files: Map<string, PlanFile>, dirs: Record<string, string[]> = {}) {
-  const byEnd = <T>(path: string, keys: Iterable<string>, pick: (key: string) => T): T | undefined => {
-    const hit = [...keys].sort((a, b) => b.length - a.length).find(k => path === k || path.endsWith(`/${k}`))
-    return hit === undefined ? undefined : pick(hit)
+// A project folder in memory: `files` is what fs.list, fs.stat and fs.read answer from; folders come from the
+// file names. The engine hands the stubs absolute paths, so a path is matched by its end, and one that matches
+// no folder is the project root. A file with `real` set is a link: fs.list shows it as a link and fs.stat
+// resolves it to that path.
+export function project(on: On, files: Map<string, PlanFile>) {
+  const parent = (k: string) => (k.includes('/') ? k.slice(0, k.lastIndexOf('/')) : '')
+  const folders = () => {
+    const set = new Set<string>()
+    for (const k of files.keys()) {
+      const parts = k.split('/')
+      for (let i = 1; i < parts.length; i += 1) set.add(parts.slice(0, i).join('/'))
+    }
+    return set
   }
+  const byEnd = (path: string, keys: Iterable<string>) => [...keys].sort((a, b) => b.length - a.length).find(k => path === k || path.endsWith(`/${k}`))
   on('fs.stat', ($, e) => {
-    const key = byEnd(e.path, files.keys(), k => k)
+    const key = byEnd(e.path, files.keys())
     const f = key === undefined ? undefined : files.get(key)
     if (!f) return { value: { kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false, realPath: '/proj' } }
     return { value: { kind: 'file' as const, size: f.text.length, mtimeMs: f.mtimeMs, isLink: false, realPath: f.real ?? `/proj/${key}` } }
   })
   on('fs.read', ($, e) => {
-    const key = byEnd(e.path, files.keys(), k => k)
+    const key = byEnd(e.path, files.keys())
     const f = key === undefined ? undefined : files.get(key)
     return f ? { value: f.text } : { deny: `ENOENT ${e.path}` }
   })
   on('fs.list', ($, e) => {
-    const dir = byEnd(e.path, Object.keys(dirs), k => k)
-    if (dir === undefined) return { deny: `ENOENT ${e.path}` }
-    return {
-      value: (dirs[dir] ?? []).map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: files.get(`${dir}/${name}`)?.mtimeMs ?? 0, isLink: false })),
-    }
+    const all = folders()
+    const dir = byEnd(e.path, all) ?? ''
+    const entries = [
+      ...[...files.entries()].filter(([k]) => parent(k) === dir).map(([k, f]) =>
+        f.real === undefined
+          ? { name: k.slice(dir === '' ? 0 : dir.length + 1), kind: 'file' as const, size: f.text.length, mtimeMs: f.mtimeMs, isLink: false }
+          : { name: k.slice(dir === '' ? 0 : dir.length + 1), kind: 'other' as const, size: 0, mtimeMs: 0, isLink: true },
+      ),
+      ...[...all].filter(d => parent(d) === dir).map(d => ({ name: d.slice(dir === '' ? 0 : dir.length + 1), kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false })),
+    ]
+    return { value: entries }
   })
 }

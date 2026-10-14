@@ -6,7 +6,7 @@
 
 **A progress pane for Claude Code.** When an agent works through a big, multi-phase plan, you usually can't tell where it is: how much is done, what is left, how long it has been going, what it has cost. This mod docks a pane beside the terminal that answers those questions at a glance.
 
-**It works on a project that is already underway.** Open Claude Code in a folder that has a plan (`PLAN.md`, `ROADMAP.md`, `TODO.md`, a superpowers or GSD plan) and the pane opens beside the terminal showing where the project stands right now. No setup, no re-planning, no asking the agent to rewrite its task list.
+**It works on a project that is already underway.** Open Claude Code in a folder whose markdown files hold a plan, a checklist or a progress note (whatever they are called) and the pane opens beside the terminal showing where the project stands right now. No setup, no re-planning, no asking the agent to rewrite its task list.
 
 It is a Claude Code **mod** (a plugin that draws and reacts inside the CLI itself). Requires Claude Code 2.1.287 or later.
 
@@ -55,12 +55,13 @@ claude --plugin-dir ./is-it-done-yet
 
 ## Use it
 
-Go to your project and start Claude Code. If the folder has a plan file, the pane opens by itself (on a terminal at least 144 columns wide; otherwise type `/progress`). That's it.
+Go to your project and start Claude Code. If the folder has a markdown plan, checklist or progress file, the pane opens by itself (on a terminal at least 144 columns wide; otherwise type `/progress`). That's it.
 
 | Command | Does |
 |---|---|
 | `/progress` | Open the pane, or close it if it is open. Also re-reads the plan file. |
-| `/progress plan <file>` | Follow one specific plan file (inside the project) instead of auto-detecting, and open the pane. `/progress plan auto` goes back to auto-detect. |
+| `/progress plan` | List the plan candidates it found, ranked, with their progress. |
+| `/progress plan <file>` | Follow one specific file (inside the project) instead of the best guess, and open the pane. `/progress plan auto` goes back to the best guess. |
 | `/progress goal <text>` | Set the title shown at the top (default: the folder name). |
 | `/progress reset` | Clear this session's task list and restart its clock. |
 | `/progress open` / `/progress close` | The same as the toggle, explicitly. |
@@ -69,11 +70,16 @@ The pane opens by itself when a plan file is found at startup, and the first tim
 
 ### Where the progress comes from
 
-The mod looks at two places and shows the first one it finds a list in. If both have one, a **⇄ button** at the top of the pane flips between them.
+The mod looks at two places. If both have a list, a **⇄ button** at the top of the pane walks through them.
 
-**1. The project's plan file.** On startup (and on every `/progress`) it looks in the project folder for, newest file wins:
+**1. The markdown files in the folder.** On startup (and on every `/progress`) it looks through the `.md` files of the project folder, a few levels deep, newest first, skipping `node_modules` and `.git`. **It never goes by file name.** It reads each file and keeps the ones that contain trackable items: checkboxes, status symbols, or a status table. Then it ranks them by what the file says about itself:
 
-`PLAN.md` · `TODO.md` · `TASKS.md` · `ROADMAP.md` · `PROGRESS.md` · `docs/PLAN.md` · `docs/ROADMAP.md` · `docs/TODO.md` · `.planning/ROADMAP.md` · `.claude/PLAN.md` · and the newest file in `docs/superpowers/plans/`, `docs/plans/`, `plans/` or `.claude/plans/`.
+- the title and the first few lines (does it talk about a plan, a roadmap, phases, tasks, a checklist, progress, status, a goal?),
+- the headings,
+- how many items there are, and whether some are done and some not,
+- how recently it was touched.
+
+Documents that only look like lists (a review log, an architecture note, decisions) rank lower. English and Turkish wording both count. The best-ranked file is followed; the others are one press of the ⇄ button away, and `/progress plan` lists them all.
 
 It understands:
 
@@ -83,6 +89,7 @@ It understands:
 - [~] Auth module            <- in progress  ([/] works too)
 - [ ] Docs                   <- not started
 - [-] Dropped idea           <- cancelled: left out of the count
+- ✅ shipped  - 🔄 building  - ⬜ later  - [DONE] tagged   <- status as a symbol or a tag
 ````
 
 ````markdown
@@ -99,19 +106,15 @@ It understands:
 | UI    | ⬜ Todo          |
 ````
 
-When the agent ticks a box in the file, the pane picks it up after the next turn (and every 30 seconds while it is open). A file counts as a plan when it has at least two items; use `/progress plan <file>` for anything else.
+When the agent ticks a box in the file, the pane picks it up after the next turn (and every 30 seconds while it is open). A file needs at least two items to count; it is skipped above 256 KB. If the guess is wrong, press ⇄, or run `/progress plan <file>` to follow a specific one.
 
 **2. The session's task list.** The agent's own task tools (`TaskCreate`, `TaskUpdate`, `TodoWrite`) are watched live. If the mod is loaded in the middle of a session or you `/resume` one, it replays the task calls found in the transcript, so the list is not empty. Phases come from a title prefix: `Phase 2: …`, `Faz 2 - …`, `[Stage 3] …`, `P2: …`, or a `phase` key in the task's `metadata`.
-
-<p align="center">
-  <img src="docs/screenshot-tasks.png" alt="The same pane showing the task list an agent created in the session, with phases taken from the task titles" width="900">
-</p>
 
 ## How it works
 
 ```
- project plan file (PLAN.md, ROADMAP.md, ...)          agent calls TaskCreate / TaskUpdate / TodoWrite
-        │  read at startup, re-read when it changes            │  a tool.call hook sees each call and its result
+ markdown files of the project, ranked by content       agent calls TaskCreate / TaskUpdate / TodoWrite
+        │  scanned at startup, re-read when it changes         │  a tool.call hook sees each call and its result
         ▼                                                      ▼
  plan tasks ─────────────────────────┐        session task list (also replayed from the transcript)
                                      ▼
@@ -126,12 +129,13 @@ When the agent ticks a box in the file, the pane picks it up after the next turn
 
 ## Privacy and reach
 
-Reach **L1, reads**. The mod reads: plan files inside the project folder (regular files up to 512 KB, never through a link that leaves the folder), the task calls found in the session transcript, the task tools' calls and results, each turn's token counts, the session's running cost, and the session id and folder name. It adds **nothing to the model's context** (zero tokens per turn), writes no files, runs no processes, reads no environment variables, and makes **no network calls**. It keeps the session's task list and totals under one key per session in the plugin's own store, plus the file you pinned with `/progress plan`. The full footprint and a five-line threat model are in [is-it-done-yet/README.md](is-it-done-yet/README.md).
+Reach **L1, reads**. The mod reads: the markdown files of the project folder, a few levels deep (regular files up to 256 KB, newest 250 at most, never through a link), the task calls found in the session transcript, the task tools' calls and results, each turn's token counts, the session's running cost, and the session id and folder name. It adds **nothing to the model's context** (zero tokens per turn), writes no files, runs no processes, reads no environment variables, and makes **no network calls**. It keeps the session's task list and totals under one key per session in the plugin's own store, plus the file you pinned with `/progress plan`. The full footprint and a five-line threat model are in [is-it-done-yet/README.md](is-it-done-yet/README.md).
 
 ## Limitations
 
 - It draws in the terminal and the Desktop app's Code tab. In `claude -p`, the SDK, the VS Code chat panel and cloud sessions there is nothing to draw.
-- Plan files are read as markdown checklists and status tables. A plan written as plain prose or numbered steps with no checkboxes can't be tracked; use the task list, or add checkboxes.
+- Progress is read from checkboxes, status symbols and status tables. A plan written as plain prose or numbered steps with no status marks can't be tracked; use the task list, or add checkboxes.
+- Which file is "the plan" is a ranked guess from the file's content. In a folder with many checklists the first guess can be wrong; ⇄ and `/progress plan <file>` fix that.
 - A plan with more than 400 items is cut at 400.
 - Tasks replayed from the transcript carry no timestamps, so their timings are unknown.
 - Elapsed time is wall-clock, so time you spend away counts.
@@ -144,7 +148,7 @@ claude plugin validate --strict ./is-it-done-yet
 claude plugin test ./is-it-done-yet
 ```
 
-The code is a few small files in `is-it-done-yet/hooks/`: `model.ts` (tasks, phases, stats, formatting), `plan.ts` (markdown plan parser and transcript replay), `view.tsx` (the pane's layout) and `register.ts` (the hooks). Design decisions and the assumptions that haven't been checked live in [is-it-done-yet/DECISIONS.md](is-it-done-yet/DECISIONS.md).
+The code is a few small files in `is-it-done-yet/hooks/`: `model.ts` (tasks, phases, stats, formatting), `plan.ts` (markdown parser, content-based ranking and transcript replay), `view.tsx` (the pane's layout) and `register.ts` (the hooks). Design decisions and the assumptions that haven't been checked live in [is-it-done-yet/DECISIONS.md](is-it-done-yet/DECISIONS.md).
 
 ## Uninstall
 

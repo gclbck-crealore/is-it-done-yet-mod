@@ -5,13 +5,13 @@ Built against the Claude Code 2.1.295 declarations. The test suite (see DECISION
 
 ## Where the list comes from
 
-1. **The project's plan file**, found on load and on every `/progress`: `PLAN.md`, `plan.md`, `PLANS.md`, `TODO.md`, `TASKS.md`, `ROADMAP.md`, `PROGRESS.md`, `docs/PLAN.md`, `docs/ROADMAP.md`, `docs/TODO.md`, `.planning/ROADMAP.md`, `.claude/PLAN.md`, plus the newest `.md` in `docs/superpowers/plans`, `docs/plans`, `plans` and `.claude/plans`. The newest file with at least two items wins; `/progress plan <file>` pins one (stored per project). Re-read when its modification time changes: after every turn, and every 30 s while the pane is open.
-   - Checkboxes: `- [x]` done, `- [~]` or `- [/]` in progress, `- [ ]` and `- [>]` not started, `- [-]` cancelled (left out). Bullets and numbered lists both count; fenced code is ignored.
-   - A heading is a phase (the shallowest heading level below the title that holds checkboxes). A checkbox with checkboxes nested under it is a phase instead of a task.
+1. **The markdown files in the folder**, scanned on load and on every `/progress`: the `.md` / `.markdown` / `.mdx` files up to three folders deep, newest first (at most 250 files and 3 MB read, each at most 256 KB), never inside `node_modules` or `.git`, never through a link. No file names are built in. A file is a candidate when it holds at least two trackable items; candidates are ranked by their content (the title and first lines, the headings, the number of items, the mix of done and not done, how recent the file is) and the best eight are kept. The best one is followed; the ⇄ button moves to the next, `/progress plan` lists them, `/progress plan <file>` pins one (stored per project). A followed file is re-read when its modification time changes: after every turn, and every 30 s while the pane is open; the others are compared again every ten minutes.
+   - Checkboxes: `- [x]` done, `- [~]` or `- [/]` in progress, `- [ ]` and `- [>]` not started, `- [-]` cancelled (left out). Status symbols and tags work the same: `✅ ☑ ✔ 🟢` done, `🔄 ⏳ 🚧 🟡 [WIP]` in progress, `⬜ ☐ 🔲 📋 [TODO]` not started, `❌` left out. Bullets and numbered lists both count; fenced code is ignored.
+   - A heading is a phase (the shallowest heading level below the title that holds items). An item with items nested under it is a phase instead of a task.
    - A file with no checkboxes but a table with a `Status`/`Durum` column is read as a status table.
 2. **The session's task tools**: `TaskCreate`, `TaskUpdate`, `TodoWrite`, watched live. A mod loaded mid-session, or a `/resume`, replays the task calls found in the transcript. Phases come from a title prefix (`Phase 2:`, `Faz 2 -`, `[Stage 3]`, `P2:`) or a `phase` key in `metadata`.
 
-The plan file wins when both exist; a ⇄ button flips. Token and API figures are session totals either way.
+The best-ranked file wins when a session list also exists; the ⇄ button flips. Token and API figures are session totals either way.
 
 ## Commands
 
@@ -19,7 +19,8 @@ The plan file wins when both exist; a ⇄ button flips. Token and API figures ar
 |---|---|
 | `/progress` | open the pane, or close it if it is open (registered `immediate`, so it can run mid-turn); also re-reads the plan |
 | `/progress open`, `/progress close` | the same, explicitly |
-| `/progress plan <file>` | follow one file inside the project and open the pane; `/progress plan auto` goes back to auto-detect |
+| `/progress plan` | list the candidate plan files with their progress |
+| `/progress plan <file>` | follow one file inside the project and open the pane; `/progress plan auto` goes back to the best guess |
 | `/progress goal <text>` | set the title; with no text, back to the folder name |
 | `/progress reset` | clear the session's task list and restart its clock |
 
@@ -31,11 +32,11 @@ The plan file wins when both exist; a ⇄ button flips. Token and API figures ar
 Reach L1, reads (reads files, reads the transcript, persists state, draws).
 
     Threat model for is-it-done-yet (reach L1, reads)
-    1. Reads:    plan files inside the project folder (a fixed list of names, the newest .md in four fixed folders, and the one file you pin with /progress plan), each a regular file of at most 512 KB whose resolved path lies inside the project; the session transcript (the task tools' calls only are used); the task tools' calls and results; each turn's token counts; the session's running cost; the session id and folder name; its own state keys and store keys; no env, settings or other files
+    1. Reads:    the markdown files of the project folder (up to three folders deep, never node_modules or .git, regular files only, at most 250 files, 256 KB each and 3 MB in all), and the one file you pin with /progress plan (which must resolve to a path inside the project); the session transcript (the task tools' calls only are used); the task tools' calls and results; each turn's token counts; the session's running cost; the session id and folder name; its own state keys and store keys; no env, settings or other files
     2. Runs:     nothing
     3. Sends:    nothing leaves the machine
     4. Persists: $.state for the session; one $.store key per session (s-<session id>: up to 400 tasks of at most 160 characters, token totals, cost, goal) and one per pinned project (pin:<folder>: the file name you gave), kept until deleted or cleanupPeriodDays unread; writes no files
-    5. Hostile input: plan files and task subjects are written by the repository or the model and can say anything; they are only parsed into task titles (markdown stripped, whitespace collapsed, 160 characters) and drawn as Text, never executed, written to a file, sent anywhere or put in the model's context, so crafted text can only change what the pane shows; a plan reached through a link out of the folder, a path with `..` that leaves it, a non-regular file, or anything over 512 KB is skipped; a saved snapshot is shape-checked and capped on load
+    5. Hostile input: plan files and task subjects are written by the repository or the model and can say anything; they are only parsed into task titles (markdown stripped, whitespace collapsed, 160 characters) and drawn as Text, never executed, written to a file, sent anywhere or put in the model's context, so crafted text can only change what the pane shows; a link is never followed, a pinned path that resolves outside the folder (`..`, a link) or is not a regular file, and anything over 256 KB, are skipped; a saved snapshot is shape-checked and capped on load
 
 ## Install
 
@@ -46,7 +47,8 @@ autoOpen: open the pane by itself when a plan file is found at startup and the f
 
 ## Limitations
 - The ETA is crude: time this session has run divided by the tasks it finished, times tasks left. Tasks of very different size make it wrong; it is hidden until this session has finished one.
-- Plan files must be markdown checklists or status tables; prose and plain numbered steps carry no status. More than 400 items are cut.
+- Progress is read from checkboxes, status symbols and status tables; prose and plain numbered steps carry no status. More than 400 items are cut.
+- Which file is the plan is a ranked guess from the file's content (title, first lines, headings, mix of done and not done, recency). In a folder with many checklists the first guess can be wrong; ⇄ and `/progress plan <file>` fix that.
 - Tasks replayed from the transcript carry no timestamps.
 - After `/clear` the session list starts empty (a new session) while the project plan is read again; after `/resume` the saved list comes back.
 - The restore hook is a `classic.SessionStart` hook, which does not run in an installed mod where an organisation manages Claude Code.

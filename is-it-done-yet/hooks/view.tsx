@@ -78,7 +78,7 @@ export function renderPane(el: El, d: ViewData, act: ViewActions) {
     return (
       <Box flexDirection="column" paddingX={1}>
         <Text bold wrap="truncate-end">◆ {d.goal}</Text>
-        <Text dimColor wrap="wrap">{'No plan file found and the agent has not created tasks yet. To show a plan file: /progress plan <file>'}</Text>
+        <Text dimColor wrap="wrap">{"No plan or task list found in the markdown files of this folder, and the agent has not created tasks yet. See what was found, or follow one: /progress plan <file>"}</Text>
         {stat('Token', fmtTokens(totalTokens(tk)))}
         {stat('API', fmtUsd(d.costUsd))}
         <Button key="close" label="✕ Close" plain dimColor onPress={act.close} />

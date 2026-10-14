@@ -15,24 +15,29 @@ import {
   type Update,
   type ViewMode,
 } from './model.js'
-import { parsePlan, rebuildFromTranscript } from './plan.js'
+import { parsePlan, rebuildFromTranscript, scorePlan } from './plan.js'
 import { renderPane } from './view.js'
 
 type Api = Parameters<Hook<'session.start'>>[0]
 type Found = { path: string; mtimeMs: number; tasks: Task[] }
+type Candidate = { path: string; title: string; total: number; done: number; score: number }
 
 const PANE = 'progress'
 const PULSE_MS = 30_000
 const RESCAN_MS = 60_000
 const MAX_PLAN_BYTES = 512 * 1024
 
-// Where a project keeps its plan, most specific first. The newest file wins among those that parse.
-const PLAN_FILES = [
-  'PLAN.md', 'plan.md', 'PLANS.md', 'TODO.md', 'todo.md', 'TASKS.md', 'tasks.md', 'ROADMAP.md', 'roadmap.md',
-  'PROGRESS.md', 'docs/PLAN.md', 'docs/plan.md', 'docs/ROADMAP.md', 'docs/TODO.md', '.planning/ROADMAP.md',
-  '.claude/PLAN.md', '.claude/plan.md',
-]
-const PLAN_DIRS = ['docs/superpowers/plans', 'docs/plans', 'plans', '.claude/plans']
+// Any markdown file in the folder may be the plan: the content decides (plan.ts), not the name. These bounds
+// keep a scan cheap: the newest files first, a few levels deep, small files only, never dependencies.
+const SKIP_DIRS = new Set(['node_modules', '.git'])
+const MARKDOWN = /\.(md|markdown|mdx)$/i
+const MAX_DEPTH = 3
+const MAX_DIRS = 150
+const MAX_FILES = 250
+const MAX_FILE_BYTES = 256 * 1024
+const MAX_TOTAL_BYTES = 3 * 1024 * 1024
+const MAX_CANDIDATES = 8
+const RESCAN_IDLE_MS = 10 * 60_000
 
 const tasks = atom({ plugin: 'is-it-done-yet', key: 'tasks' } as const, [] as Task[])
 const tokens = atom({ plugin: 'is-it-done-yet', key: 'tokens' } as const, EMPTY_TOKENS as Tokens)
@@ -44,6 +49,7 @@ const tick = atom({ plugin: 'is-it-done-yet', key: 'tick' } as const, 0)
 const planPath = atom({ plugin: 'is-it-done-yet', key: 'planPath' } as const, '')
 const planMtime = atom({ plugin: 'is-it-done-yet', key: 'planMtime' } as const, 0)
 const planTasks = atom({ plugin: 'is-it-done-yet', key: 'planTasks' } as const, [] as Task[])
+const planCands = atom({ plugin: 'is-it-done-yet', key: 'planCands' } as const, [] as Candidate[])
 const planBase = atom({ plugin: 'is-it-done-yet', key: 'planBase' } as const, -1)
 const view = atom({ plugin: 'is-it-done-yet', key: 'view' } as const, 'auto' as ViewMode)
 const lastScan = atom({ plugin: 'is-it-done-yet', key: 'lastScan' } as const, 0)
@@ -133,42 +139,54 @@ async function realRoot($: Api): Promise<string | undefined> {
   return st?.realPath
 }
 
-// A plan file is read only when it is a regular file, small, and really lives inside the project folder
+// A pinned file is read only when it is a regular file, small, and really lives inside the project folder
 // (a symlink out of it does not count).
-async function fileInfo($: Api, root: string, path: string): Promise<{ mtimeMs: number; real: string } | null> {
+async function fileInfo($: Api, root: string, path: string): Promise<{ mtimeMs: number } | null> {
   const st = await $.fs.stat(path, { resolve: true }).catch(() => undefined)
-  if (st === undefined || st.kind !== 'file' || st.size > MAX_PLAN_BYTES) return null
+  if (st === undefined || st.kind !== 'file' || st.size > MAX_FILE_BYTES) return null
   if (st.realPath === undefined || !st.realPath.startsWith(`${root}/`)) return null
-  return { mtimeMs: st.mtimeMs, real: st.realPath }
+  return { mtimeMs: st.mtimeMs }
 }
 
-async function candidateNames($: Api): Promise<string[]> {
-  const names = [...PLAN_FILES]
-  for (const dir of PLAN_DIRS) {
-    const entries = await $.fs.list(dir).catch(() => [])
-    const newest = entries.filter(e => e.kind === 'file' && /\.md$/i.test(e.name)).sort((a, b) => b.mtimeMs - a.mtimeMs)[0]
-    if (newest) names.push(`${dir}/${newest.name}`)
+type Listed = { path: string; mtimeMs: number; size: number }
+
+// Regular markdown files only: a link is never followed, so nothing outside the folder is reached.
+async function walk($: Api, dir: string, depth: number, out: Listed[], dirs: { n: number }): Promise<void> {
+  dirs.n += 1
+  const entries = await (dir === '' ? $.fs.list() : $.fs.list(dir)).catch(() => [])
+  for (const e of entries) {
+    const rel = dir === '' ? e.name : `${dir}/${e.name}`
+    if (e.kind === 'file' && MARKDOWN.test(e.name)) out.push({ path: rel, mtimeMs: e.mtimeMs, size: e.size })
+    else if (e.kind === 'dir' && depth < MAX_DEPTH && dirs.n < MAX_DIRS && !SKIP_DIRS.has(e.name)) await walk($, rel, depth + 1, out, dirs)
   }
-  return names
 }
 
-async function scan($: Api, cwd: string): Promise<Found | null> {
-  const root = await realRoot($)
-  if (root === undefined) return null
-  const pinned = await $.store.get(`pin:${cwd}`)
-  const isPinned = typeof pinned === 'string' && pinned !== ''
-  const names = isPinned ? [pinned] : await candidateNames($)
-  const seen = new Set<string>()
-  let best: Found | null = null
-  for (const name of names) {
-    const info = await fileInfo($, root, name)
-    if (info === null || seen.has(info.real)) continue
-    seen.add(info.real)
-    const parsed = parsePlan(await $.fs.read(name).catch(() => ''))
-    if (parsed.length < (isPinned ? 1 : 2)) continue
-    if (best === null || info.mtimeMs > best.mtimeMs) best = { path: name, mtimeMs: info.mtimeMs, tasks: parsed }
+type Scan = { list: Candidate[]; byPath: Map<string, Found> }
+
+// Reads the newest markdown files and keeps the ones that hold trackable items (checkboxes, status marks or a
+// status table), ranked by how much their content reads like a plan or a progress note.
+async function scan($: Api): Promise<Scan> {
+  const files: Listed[] = []
+  await walk($, '', 0, files, { n: 0 })
+  files.sort((a, b) => b.mtimeMs - a.mtimeMs)
+  const now = await $.clock.now()
+  const found: (Candidate & Found)[] = []
+  let bytes = 0
+  for (const f of files.slice(0, MAX_FILES)) {
+    if (f.size > MAX_FILE_BYTES || bytes + f.size > MAX_TOTAL_BYTES) continue
+    bytes += f.size
+    const text = await $.fs.read(f.path).catch(() => '')
+    const items = parsePlan(text)
+    if (items.length < 2) continue
+    const s = scorePlan(text, items, f.mtimeMs, now)
+    found.push({ path: f.path, title: s.title, total: items.length, done: items.filter(t => t.status === 'completed').length, score: s.score, mtimeMs: f.mtimeMs, tasks: items })
   }
-  return best
+  found.sort((a, b) => b.score - a.score || b.mtimeMs - a.mtimeMs)
+  const top = found.slice(0, MAX_CANDIDATES)
+  return {
+    list: top.map(c => ({ path: c.path, title: c.title, total: c.total, done: c.done, score: c.score })),
+    byPath: new Map(top.map(c => [c.path, { path: c.path, mtimeMs: c.mtimeMs, tasks: c.tasks }])),
+  }
 }
 
 async function setPlan($: Api, found: Found | null): Promise<void> {
@@ -190,38 +208,77 @@ async function setPlan($: Api, found: Found | null): Promise<void> {
   }
 }
 
-// Cheap when nothing changed: one stat of the followed file. With no plan found yet it rescans at most once a minute.
+// Follow one file, read fresh. Used for a pin and for the button that moves between candidates.
+async function followPlan($: Api, path: string): Promise<boolean> {
+  const st = await $.fs.stat(path).catch(() => undefined)
+  const text = await $.fs.read(path).catch(() => undefined)
+  const items = text === undefined ? [] : parsePlan(text)
+  if (st === undefined || items.length === 0) return false
+  await setPlan($, { path, mtimeMs: st.mtimeMs, tasks: items })
+  return true
+}
+
+// `choose` says what a scan may do to the file being followed: keep it while it is still a candidate (a
+// background rescan), or take the best-ranked one (a request to start over).
+async function rescan($: Api, choose: 'keep' | 'best'): Promise<void> {
+  const now = await $.clock.now()
+  await update($, lastScan, () => now)
+  const found = await scan($)
+  await update($, planCands, () => found.list)
+  const current = await read($, planPath)
+  const pinned = await $.store.get(`pin:${await $.session.cwd()}`)
+  if (typeof pinned === 'string' && pinned !== '' && (await followPlan($, pinned))) return
+  const keep = choose === 'keep' ? found.byPath.get(current) : undefined
+  await setPlan($, keep ?? found.byPath.get(found.list[0]?.path ?? '') ?? null)
+}
+
+// Cheap when nothing changed: one stat of the followed file. With no plan yet it looks again at most once a
+// minute, and a followed plan is only compared with the rest every ten minutes.
 async function refreshPlan($: Api, force: boolean): Promise<void> {
   const path = await read($, planPath)
   if (!force && path !== '') {
     const st = await $.fs.stat(path).catch(() => undefined)
-    if (st !== undefined && st.mtimeMs === (await read($, planMtime))) return
-    if (st !== undefined) {
+    if (st !== undefined && st.mtimeMs !== (await read($, planMtime))) {
       const text = await $.fs.read(path).catch(() => undefined)
-      const parsed = text === undefined ? [] : parsePlan(text)
-      if (parsed.length > 0) {
-        await setPlan($, { path, mtimeMs: st.mtimeMs, tasks: parsed })
-        return
-      }
+      const items = text === undefined ? [] : parsePlan(text)
+      if (items.length > 0) await setPlan($, { path, mtimeMs: st.mtimeMs, tasks: items })
     }
   }
-  const now = await $.clock.now()
-  if (!force && path === '' && now - (await read($, lastScan)) < RESCAN_MS) return
-  await update($, lastScan, () => now)
-  await setPlan($, await scan($, await $.session.cwd()))
+  const idle = (await $.clock.now()) - (await read($, lastScan))
+  if (force || (path === '' && idle >= 60_000) || idle >= RESCAN_IDLE_MS) await rescan($, force ? 'best' : 'keep')
 }
 
-// Follow one file instead of guessing. It must be a plan the parser understands, inside the project.
+// Follow one file instead of the best guess. It must be a plan the parser understands, inside the project.
 async function pinPlan($: Api, rel: string): Promise<string> {
   const root = await realRoot($)
   const info = root === undefined ? null : await fileInfo($, root, rel)
-  if (info === null) return `${rel} is not a readable file inside this project (512 KB at most)`
-  const parsed = parsePlan(await $.fs.read(rel).catch(() => ''))
-  if (parsed.length === 0) return `no checkbox items ("- [ ]") or status table found in ${rel}`
+  if (info === null) return `${rel} is not a readable file inside this project (256 KB at most)`
+  if (!(await followPlan($, rel))) return `no checkbox items ("- [ ]"), status marks or status table found in ${rel}`
   await $.store.set(`pin:${await $.session.cwd()}`, rel)
-  await setPlan($, { path: rel, mtimeMs: info.mtimeMs, tasks: parsed })
   await update($, view, () => 'plan')
-  return `following ${rel} (${parsed.length} tasks)`
+  return `following ${rel} (${(await read($, planTasks)).length} tasks)`
+}
+
+async function unpinPlan($: Api): Promise<void> {
+  await $.store.set(`pin:${await $.session.cwd()}`, '')
+  await update($, view, () => 'auto')
+  await rescan($, 'best')
+}
+
+async function listPlans($: Api): Promise<string> {
+  const list = await read($, planCands)
+  if (list.length === 0) return 'no plan or task list found in the markdown files of this folder'
+  const lines = list.map((c, i) => `${i + 1}. ${c.path}: ${c.done}/${c.total} done, "${c.title}"`)
+  return `${lines.join('\n')}\nfollow another with /progress plan <file>`
+}
+
+// The button at the top of the pane: the next candidate plan, then the session's own task list, then round.
+async function selectSource($: Api, next: { kind: 'plan' | 'live'; key: string }): Promise<void> {
+  if (next.kind === 'live') {
+    await update($, view, () => 'live')
+    return
+  }
+  if (await followPlan($, next.key)) await update($, view, () => 'plan')
 }
 
 async function bootstrap($: Api): Promise<void> {
@@ -330,10 +387,9 @@ export const register: Register = (on, options) => {
     }
     if (arg === 'plan' || arg.startsWith('plan ')) {
       const rel = arg.slice(4).trim()
-      if (rel === '' || rel === 'auto') {
-        await $.store.set(`pin:${await $.session.cwd()}`, '')
-        await update($, view, () => 'auto')
-        await refreshPlan($, true)
+      if (rel === '') return { text: await listPlans($) }
+      if (rel === 'auto') {
+        await unpinPlan($)
         return { text: 'looking for the project plan on its own again' }
       }
       const said = await pinPlan($, rel)
@@ -363,8 +419,16 @@ export const register: Register = (on, options) => {
     const live = await read($, tasks)
     const plan = await read($, planTasks)
     const path = await read($, planPath)
+    const cands = await read($, planCands)
     const source = pickSource(await read($, view), plan.length, live.length)
     const used = await $.session.usage()
+    // The button walks through the candidate plans in rank order, then the session's task list, then round.
+    const seq: { kind: 'plan' | 'live'; key: string; label: string; count: number }[] = [
+      ...cands.map(c => ({ kind: 'plan' as const, key: c.path, label: c.path, count: c.total })),
+      ...(live.length > 0 ? [{ kind: 'live' as const, key: '', label: 'Session tasks', count: live.length }] : []),
+    ]
+    const at = source === 'plan' ? seq.findIndex(x => x.kind === 'plan' && x.key === path) : seq.findIndex(x => x.kind === 'live')
+    const next = seq.length > 1 ? seq[(at + 1) % seq.length] : undefined
     return renderPane(
       el,
       {
@@ -378,14 +442,7 @@ export const register: Register = (on, options) => {
         columns: e.props.bodyColumns,
         source,
         sourceLabel: source === 'plan' ? path : 'Session tasks',
-        other:
-          source === 'plan'
-            ? live.length > 0
-              ? { label: 'Session tasks', count: live.length }
-              : null
-            : plan.length > 0
-              ? { label: path, count: plan.length }
-              : null,
+        other: next ? { label: next.label, count: next.count } : null,
         baseDone: source === 'plan' ? Math.max(0, await read($, planBase)) : 0,
       },
       {
@@ -396,7 +453,7 @@ export const register: Register = (on, options) => {
           void $.ui.close({ id: PANE })
         },
         switchSource: () => {
-          void update($, view, () => (source === 'plan' ? 'live' : 'plan'))
+          if (next) void selectSource($, next)
         },
       },
     )
