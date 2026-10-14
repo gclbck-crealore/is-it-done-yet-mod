@@ -32,14 +32,14 @@ The labels are plain strings in `is-it-done-yet/hooks/view.tsx` if you want to c
 ## Install
 
 ```sh
-claude plugin marketplace add gclbck-crealore/is-it-done-yet
-claude plugin install is-it-done-yet@is-it-done-yet
+claude plugin marketplace add gclbck-crealore/is-it-done-yet-mod
+claude plugin install is-it-done-yet@is-it-done-yet-mod
 ```
 
 Or from inside a session, in one step:
 
 ```
-/plugin install is-it-done-yet --marketplace gclbck-crealore/is-it-done-yet
+/plugin install is-it-done-yet --marketplace gclbck-crealore/is-it-done-yet-mod
 ```
 
 Then run `/reload-plugins` in an open session, or start a new one. (The installer may say one option is "not yet set": that is `autoOpen`, which defaults to on, so you can ignore it.)
@@ -146,7 +146,7 @@ The code is a few small files in `is-it-done-yet/hooks/`: `model.ts` (tasks, pha
 ## Uninstall
 
 ```sh
-claude plugin uninstall is-it-done-yet@is-it-done-yet
+claude plugin uninstall is-it-done-yet@is-it-done-yet-mod
 ```
 
 or disable it in `/plugin`. It leaves one small store key per session and one per pinned project, which expire on their own.

@@ -1,6 +1,6 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "is-it-done-yet",
+  "name": "is-it-done-yet-mod",
   "description": "A Claude Code mod: a docked progress pane that reads your project's plan file (or the agent's task list) and shows percent done, phases, tasks, time, tokens and API cost.",
   "owner": {
     "name": "gclbck-crealore",
