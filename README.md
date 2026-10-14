@@ -47,6 +47,12 @@ claude plugin install is-it-done-yet@is-it-done-yet-mod
 
 Then run `/reload-plugins` in an open session, or start a new one. (The installer may say one option is "not yet set": that is `autoOpen`, which defaults to on, so you can ignore it.)
 
+To update later, one command (use `@is-it-done-yet-mod` instead if you installed from this repository alone), then `/reload-plugins` or a new session:
+
+```sh
+claude plugin update is-it-done-yet@gclbck-crealore-mods
+```
+
 To try it for a single session without installing, clone the repo and run:
 
 ```sh
