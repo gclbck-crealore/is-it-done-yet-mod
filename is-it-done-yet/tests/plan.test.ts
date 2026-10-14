@@ -1,0 +1,260 @@
+import { describe, expect, test } from 'claude-code/testing'
+import { pickSource, stats, type Task } from '../hooks/model.js'
+import { parsePlan, rebuildFromTranscript } from '../hooks/plan.js'
+import { PANE, project, run, start, world, type PlanFile } from './helpers.js'
+
+const PLAN = `# Project
+
+## Phase 1: Setup
+- [x] Init repo
+- [x] CI
+- [ ] Docs
+
+## Phase 2: API
+- [~] Auth module
+- [ ] Endpoints
+- [-] Dropped idea
+
+\`\`\`
+- [ ] not a task
+\`\`\`
+`
+
+const ROADMAP = `## Roadmap
+- [x] **Phase 1: Foundation** - base
+  - [x] 01-01 Scaffold
+  - [x] 01-02 Schema
+- [ ] **Phase 2: Core**
+  - [ ] 02-01 Auth
+  - [~] 02-02 API
+`
+
+const TABLE = `## Status
+| Phase | Status |
+|---|---|
+| Setup | ✅ Done |
+| API | 🔄 In progress |
+| UI | ⬜ Todo |
+| Old | ❌ Cancelled |
+`
+
+const files = (entries: Record<string, PlanFile>) => new Map(Object.entries(entries))
+
+const task = (status: Task['status'], doneAt = 0): Task => ({ id: 'x', subject: 'x', active: '', status, phase: '', phaseTitle: '', startedAt: 0, doneAt })
+
+describe('parsePlan', () => {
+  test('headings become phases; [~] is in progress, [-] is dropped, fenced code is ignored', () => {
+    expect(parsePlan(PLAN).map(t => [t.subject, t.status, t.phase, t.phaseTitle])).toEqual([
+      ['Init repo', 'completed', '01', 'Phase 1: Setup'],
+      ['CI', 'completed', '01', 'Phase 1: Setup'],
+      ['Docs', 'pending', '01', 'Phase 1: Setup'],
+      ['Auth module', 'in_progress', '02', 'Phase 2: API'],
+      ['Endpoints', 'pending', '02', 'Phase 2: API'],
+    ])
+  })
+
+  test('a checkbox with checkboxes under it is a phase, not a task', () => {
+    expect(parsePlan(ROADMAP).map(t => [t.subject, t.status, t.phaseTitle])).toEqual([
+      ['01-01 Scaffold', 'completed', 'Phase 1: Foundation - base'],
+      ['01-02 Schema', 'completed', 'Phase 1: Foundation - base'],
+      ['02-01 Auth', 'pending', 'Phase 2: Core'],
+      ['02-02 API', 'in_progress', 'Phase 2: Core'],
+    ])
+  })
+
+  test('a status table is read only when the file has no checkboxes', () => {
+    expect(parsePlan(TABLE).map(t => [t.subject, t.status, t.phaseTitle])).toEqual([
+      ['Setup', 'completed', 'Status'],
+      ['API', 'in_progress', 'Status'],
+      ['UI', 'pending', 'Status'],
+    ])
+    expect(parsePlan(`${PLAN}\n${TABLE}`).length).toBe(5)
+  })
+
+  test('prose with no checkbox and no status table is not a plan', () => {
+    expect(parsePlan('# Notes\n\nSome words.\n- a bullet\n')).toEqual([])
+  })
+})
+
+describe('rebuildFromTranscript and stats', () => {
+  test('replays the task tools in order and skips failed calls', () => {
+    const tasks = rebuildFromTranscript([
+      { toolUses: [{ tool: 'TaskCreate', input: { subject: 'Phase 1: a' }, result: { task: { id: '1', subject: 'Phase 1: a' } } }] },
+      {
+        toolUses: [
+          { tool: 'TaskCreate', input: { subject: 'Phase 1: b' }, result: { task: { id: '2', subject: 'Phase 1: b' } } },
+          { tool: 'TaskUpdate', input: { taskId: '1', status: 'completed' }, result: { success: true } },
+        ],
+      },
+      { toolUses: [{ tool: 'TaskUpdate', input: { taskId: '2', status: 'in_progress' }, result: { success: false } }] },
+    ])
+    expect(tasks.map(t => [t.id, t.status, t.phase])).toEqual([
+      ['1', 'completed', '1'],
+      ['2', 'pending', '1'],
+    ])
+  })
+
+  test('the plan wins by default, a mode with nothing to show falls back', () => {
+    expect([pickSource('auto', 3, 2), pickSource('auto', 0, 2), pickSource('live', 3, 2), pickSource('live', 3, 0), pickSource('plan', 0, 2)]).toEqual([
+      'plan',
+      'live',
+      'live',
+      'plan',
+      'live',
+    ])
+  })
+
+  test('the ETA counts only what this session finished', () => {
+    const tasks = [...Array(6).fill(0).map(() => task('completed')), ...Array(4).fill(0).map(() => task('pending'))]
+    const hour = 3_600_000
+    expect(stats(tasks, 1000, 1000 + hour, 6).etaMs).toBeNull()
+    expect(stats(tasks, 1000, 1000 + hour, 4).etaMs).toBe((hour / 2) * 4)
+    expect(stats(tasks, 1000, 1000 + hour, 0).etaMs).toBe((hour / 6) * 4)
+  })
+})
+
+describe('the project plan in the pane', () => {
+  const pane = (surface: 'terminal' | 'desktop' = 'terminal') => ({ ...PANE, surface })
+
+  test('a plan file is shown as soon as the session starts', async ($, on) => {
+    world(on)
+    project(on, files({ 'PLAN.md': { text: PLAN, mtimeMs: 10 } }))
+    await $.session.start(start)
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await $.ui.mount(pane(surface))
+      expect(await ui.find({ type: 'Text', text: /^40%$/ })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /≡ PLAN\.md · 5 tasks/ })).toBeDefined()
+      expect(await ui.find({ type: 'Button', key: 'phase-02' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /▶ Auth module/ })).toBeDefined()
+      await ui.unmount()
+    }
+  })
+
+  test('the newest plan file wins; a one-checkbox file is not a plan', async ($, on) => {
+    world(on)
+    project(
+      on,
+      files({
+        'PLAN.md': { text: PLAN, mtimeMs: 5 },
+        'TODO.md': { text: '- [x] one\n- [ ] two\n', mtimeMs: 9 },
+        'ROADMAP.md': { text: '- [ ] lonely\n', mtimeMs: 99 },
+      }),
+    )
+    await $.session.start(start)
+    const ui = await $.ui.mount(pane())
+    expect(await ui.find({ type: 'Text', text: /≡ TODO\.md · 2 tasks/ })).toBeDefined()
+  })
+
+  test('the newest file in docs/superpowers/plans is a candidate', async ($, on) => {
+    world(on)
+    project(
+      on,
+      files({
+        'docs/superpowers/plans/old.md': { text: '- [x] a\n- [x] b\n', mtimeMs: 1 },
+        'docs/superpowers/plans/new.md': { text: '- [x] a\n- [ ] b\n- [ ] c\n', mtimeMs: 7 },
+      }),
+      { 'docs/superpowers/plans': ['old.md', 'new.md'] },
+    )
+    await $.session.start(start)
+    const ui = await $.ui.mount(pane())
+    expect(await ui.find({ type: 'Text', text: /≡ docs\/superpowers\/plans\/new\.md · 3 tasks/ })).toBeDefined()
+  })
+
+  test('a plan that is a link out of the project folder is not read', async ($, on) => {
+    world(on)
+    project(on, files({ 'PLAN.md': { text: PLAN, mtimeMs: 10, real: '/etc/PLAN.md' } }))
+    await $.session.start(start)
+    const ui = await $.ui.mount(pane())
+    expect(await ui.find({ type: 'Text', text: /No plan file found/ })).toBeDefined()
+  })
+
+  test('ticking a box in the file shows up after the next turn', async ($, on) => {
+    world(on)
+    const f = files({ 'PLAN.md': { text: PLAN, mtimeMs: 10 } })
+    project(on, f)
+    on('turn.complete', () => ({ text: '' }))
+    await $.session.start(start)
+    f.set('PLAN.md', { text: PLAN.replace('- [~] Auth module', '- [x] Auth module'), mtimeMs: 20 })
+    await $.turn.complete({ turnId: 't1', reason: 'answer', answer: 'ok', durationMs: 1, isAborted: false })
+    const ui = await $.ui.mount(pane())
+    expect(await ui.find({ type: 'Text', text: /^60%$/ })).toBeDefined()
+  })
+
+  test('/progress plan follows one file and refuses a path outside the project', async ($, on) => {
+    world(on)
+    project(
+      on,
+      files({
+        'PLAN.md': { text: PLAN, mtimeMs: 10 },
+        'docs/mine.md': { text: '- [x] a\n- [ ] b\n', mtimeMs: 1 },
+        'secret.md': { text: '- [ ] x\n- [ ] y\n', mtimeMs: 1, real: '/etc/secret.md' },
+        'notes.md': { text: 'just prose', mtimeMs: 1 },
+      }),
+    )
+    await $.session.start(start)
+    expect((await $.command.run(run('plan docs/mine.md'))).text).toBe('following docs/mine.md (2 tasks)')
+    expect((await $.command.run(run('plan ../secret.md'))).text).toMatch(/not a readable file inside this project/)
+    expect((await $.command.run(run('plan notes.md'))).text).toMatch(/no checkbox items/)
+    const ui = await $.ui.mount(pane())
+    expect(await ui.find({ type: 'Text', text: /≡ docs\/mine\.md · 2 tasks/ })).toBeDefined()
+    expect((await $.command.run(run('plan auto'))).text).toMatch(/on its own again/)
+  })
+
+  test('with a plan and session tasks, a button flips between them', async ($, on) => {
+    world(on)
+    project(on, files({ 'PLAN.md': { text: PLAN, mtimeMs: 10 } }))
+    await $.session.start(start)
+    await $.tool.call({ tool: 'TaskCreate', subject: 'Phase 1: only task', description: 'x' })
+    const ui = await $.ui.mount(pane())
+    expect(await ui.find({ type: 'Button', text: /Session tasks \(1\)/ })).toBeDefined()
+    await ui.press({ key: 'switch' })
+    expect(await ui.find({ type: 'Text', text: /⚙ Session tasks · 1 task/ })).toBeDefined()
+    expect(await ui.find({ type: 'Button', text: /PLAN\.md \(5\)/ })).toBeDefined()
+  })
+
+  test('a mod loaded mid-session rebuilds the task list from the transcript', async ($, on) => {
+    world(on)
+    project(on, files({}))
+    on('session.messages', () => ({
+      value: [
+        { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'a', tool: 'TaskCreate', input: { subject: 'Phase 1: a' }, result: { task: { id: '1', subject: 'Phase 1: a' } } }] },
+        { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'b', tool: 'TaskCreate', input: { subject: 'Phase 1: b' }, result: { task: { id: '2', subject: 'Phase 1: b' } } }] },
+        { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'c', tool: 'TaskUpdate', input: { taskId: '1', status: 'completed' }, result: { success: true } }] },
+      ] as never,
+    }))
+    await $.session.start(start)
+    const ui = await $.ui.mount(pane())
+    expect(await ui.find({ type: 'Text', text: /^50%$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /⚙ Session tasks · 2 tasks/ })).toBeDefined()
+  })
+
+  test('a project with a plan opens the pane at startup; one without does not', async ($, on) => {
+    const w = world(on)
+    project(on, files({ 'PLAN.md': { text: PLAN, mtimeMs: 10 } }))
+    await $.session.start(start)
+    expect(w.opened).toBe(1)
+  })
+
+  test('no plan, no pane at startup; autoOpen off, no pane even with a plan', { options: { autoOpen: false } }, async ($, on) => {
+    const w = world(on)
+    project(on, files({ 'PLAN.md': { text: PLAN, mtimeMs: 10 } }))
+    await $.session.start(start)
+    expect(w.opened).toBe(0)
+  })
+
+  test('without any plan file nothing opens by itself', async ($, on) => {
+    const w = world(on)
+    project(on, files({}))
+    await $.session.start(start)
+    expect(w.opened).toBe(0)
+  })
+
+  test('pinning a plan opens the pane', { options: { autoOpen: false } }, async ($, on) => {
+    const w = world(on)
+    project(on, files({ 'docs/mine.md': { text: '- [x] a\n- [ ] b\n', mtimeMs: 1 } }))
+    await $.session.start(start)
+    expect(w.opened).toBe(0)
+    await $.command.run(run('plan docs/mine.md'))
+    expect(w.opened).toBe(1)
+  })
+})

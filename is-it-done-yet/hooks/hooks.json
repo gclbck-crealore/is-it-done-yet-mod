@@ -1,0 +1,4 @@
+{
+  "description": "is-it-done-yet: TaskCreate, TaskUpdate and TodoWrite calls, turn.complete, /progress, the Pane render",
+  "modules": ["./register.ts"]
+}

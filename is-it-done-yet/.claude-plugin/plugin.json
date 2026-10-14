@@ -1,0 +1,30 @@
+{
+  "name": "is-it-done-yet",
+  "version": "0.2.0",
+  "description": "A docked progress pane for long, multi-phase agent work. Reads the project's own plan file (checkbox lists, status tables, GSD and superpowers plans) or the session's task list and shows percent done, phases and tasks with bars, elapsed time, a rough ETA, tokens used and the API-equivalent cost. Adds nothing to the model's context.",
+  "author": {
+    "name": "Crealore",
+    "url": "https://github.com/gclbck-crealore"
+  },
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "autoOpen": {
+      "type": "boolean",
+      "title": "Open on the first task",
+      "description": "Open the pane by itself the first time the agent creates a task (only when the terminal is wide enough; /progress always works)",
+      "default": true
+    }
+  },
+  "homepage": "https://github.com/gclbck-crealore/is-it-done-yet",
+  "repository": "https://github.com/gclbck-crealore/is-it-done-yet",
+  "keywords": [
+    "mods",
+    "progress",
+    "plan",
+    "tasks",
+    "pane",
+    "tokens",
+    "cost"
+  ]
+}

@@ -1,0 +1,45 @@
+# Decisions: is-it-done-yet
+
+## Decisions
+- Data comes from `tool.call` hooks on `TaskCreate`, `TaskUpdate` and `TodoWrite`, read after `next(e)` so the new task id and the update's success are known. Rejected: asking the model to report progress (costs tokens every turn and drifts), and polling `TaskList` with `$.tool.call` (drives Claude, L2, for no gain over the hooks).
+- Three statuses only: done (green), in progress (blue), to do (grey). Rejected: orange "revisit" and red "failed". The task tools carry no such states; inferring them from a reopened task or from errors guessed wrong, and a manual flag command adds surface. Dropped on request.
+- Phases are read from the subject prefix or `metadata.phase`. Rejected: a phase field of its own, because the task tools have none and the agent would need an instruction in its context.
+- Percent counts finished tasks only. Rejected: weighting an in-progress task as half, which shows progress that has not happened.
+- ETA is elapsed divided by tasks done, times tasks left. Rejected: averaging each task's in-progress time, which leaves out the time the agent spends between tasks and runs low.
+- Token is the sum of input, output, cache read and cache write, with the output figure beside it. Rejected: showing only input plus output, which hides most of an agent loop's traffic.
+- API cost is `$.session.usage().cost.usd`, read after each turn, the same figure `/cost` totals. Rejected: pricing the tokens in the mod, because a price table goes stale and the engine already has the ledger.
+- Tokens are summed from each `turn.complete` (subagent turns included). `$.session.usage()` carries no token totals, only the context window and the cost.
+- The redraw timer (`$.clock.every`, 30 s) writes a `tick` atom only while the pane is open and a task is unfinished. Rejected: `$.ui.invalidate`, because a state write redraws exactly the sites that read it.
+- Per-session `$.store` key (`s-<session id>`), restored from `classic.SessionStart` on clear, resume and fork. Rejected: one shared key, which another session on the machine would overwrite or load.
+- `/progress` is registered `immediate` so it opens the pane while the agent is mid-turn. A pane opened from a command counts as asked and is placed at any width; the automatic open on the first task is unasked and waits below 144 columns.
+- The task hooks have no `.catch`: they observe, so a failure before `next` skips the hook and the tool runs, and a failure after it leaves the result standing. Rejected: failing closed, which would block the agent's own task tool.
+- The view draws only `Box`, `Text` and `Button`, which every surface has, so one tree serves the terminal and desktop.
+- Pane labels are English (Elapsed/Session, Left, Token, API, Phase, Tasks, Close). Turkish phase prefixes (`Faz 2 -`, `Aşama 2:`) and Turkish status words in tables are still recognised as input.
+
+## Decisions added with the project-plan source (0.2.0)
+- The pane reads the project's plan file because a mod that only watches the agent's task tools is empty in any project already underway. Reach rose from L0 to L1 (files and the transcript are read). Rejected: staying at L0 and asking the person to have the agent re-create its tasks.
+- Discovery is a fixed list of names plus the newest `.md` in four fixed folders, newest file wins, with `/progress plan <file>` to pin. Rejected: scanning the whole tree (slow, picks up READMEs) and a glob option (more surface, no better answer).
+- A file is a plan only with at least two items (one when pinned), so a README with one checkbox is not mistaken for a plan.
+- Only regular files of at most 512 KB whose resolved path is inside the project folder are read (`$.fs.stat` with `resolve`, then a prefix check on the real path). Rejected: reading whatever the name resolves to, which a symlink could point anywhere.
+- Phases: the shallowest heading level below the title that directly holds checkboxes; a checkbox with checkboxes nested under it is a phase (GSD roadmap style). Rejected: every heading is a phase, which turns "Notes" and "Risks" sections into phases.
+- Status tables are parsed only when the file has no checkboxes, and only from a table with a Status/Durum column, to avoid reading unrelated tables.
+- The plan wins over the session's task list by default; a button flips. Rejected: merging the two, which double counts the same work under different names.
+- ETA and the elapsed figure use this session only: for a plan, the session's start and the tasks finished since the plan was first read. Rejected: elapsed since the first task or the file's age, which makes a 90%-done plan look fast.
+- The transcript is replayed only when the session list is empty after the saved snapshot was tried, and only the three task tools' calls are used.
+- The pane opens on its own at startup when a plan file is found (the `autoOpen` option covers it), because showing the project's state at once is the point of reading the plan. A real run showed it was not doing this before. Rejected: opening only on `/progress`.
+- Command replies carry no `is-it-done-yet:` prefix: the engine already prints the mod's name, and a real run showed it twice.
+- The plan file is re-read by modification time: after each turn, on the 30 s timer while the pane is open, and on `/progress`. Rejected: a hook on Edit/Write tool calls, which would see every file edit.
+
+## Assumptions not verified
+- Typecheck was not run on this build. The proof's typecheck stage read `unverified` because Claude Code 2.1.299 wrote no types into the copy, and the shapes were read from the 2.1.295 declarations (drift counted by the gate: additive only, none touching the calls used). If wrong: a type error shows only at `tsc` time and the engine may differ from what the tests used. How to check: run `claude --plugin-dir ./is-it-done-yet` once, then `npx -y -p typescript tsc -p ./is-it-done-yet`.
+- The pane has not been seen drawn in a real terminal (no tmux, no interactive script was run). The kit checks the tree and its validity per surface, not paint. If wrong: bars, colours, truncation or the accordion press look off, or `bodyColumns` is narrower than 22 and the bar clamps to 8 cells. How to check: `claude --plugin-dir ./is-it-done-yet`, ask for a plan with tasks, run `/progress`.
+- `$.session.id()` returns the old session's id after `/resume` and a new id after `/clear`. If wrong: a resume shows an empty plan until the next task call, or a clear restores the previous plan. How to check: run `/clear` and `/resume` with a plan open.
+- `usage` on a subagent's `turn.complete` is not already counted in its parent's turn. If wrong: Token reads high. How to check: compare Token with `/cost` after a run that used subagents.
+- `cost.usd` is the API-priced figure on a subscription as well. If wrong: the API line shows 0 or a different basis. How to check: compare with `/cost`.
+- Control characters in a task subject are neutralised by the engine's `Text`. The mod collapses whitespace and clips to 160 characters but does not strip escape sequences. If wrong: a crafted subject could draw odd characters in the pane.
+- The store grows by one small key per session and is not pruned; expiry is cleanupPeriodDays unread. If wrong: a very busy machine nears the 4 MiB store cap and `$.store.set` fails, which skips the hook that persisted.
+- The plan parser was tested on hand-written fixtures (headings, GSD-style nesting, status tables, fenced code), not on a corpus of real repositories. If wrong: a real plan with an unusual layout is split into phases oddly or not recognised; `/progress plan <file>` still pins it but cannot fix a layout the parser misreads. How to check: open the pane in a few real projects.
+- `$.fs.stat(path, { resolve: true })` resolves `realPath` for the project folder the same way it does for the plan file, so the prefix check holds. The tests stub it. If wrong: a plan is wrongly skipped (safe) or, with a real path spelled differently, wrongly accepted. How to check: `/progress plan ../x.md` on a real link.
+- Replaying the transcript at `session.start` finds the conversation already loaded on `--resume` and after `/reload-plugins`. If wrong: the list stays empty until the next task call or until the `classic.SessionStart` hook runs. How to check: resume a session that used the task tools.
+- `$.session.messages()` carries `result` for `TaskCreate` calls (needed for the task id). If wrong: replayed tasks are skipped. How to check: the same resume.
+- `autoOpen` as a `boolean` userConfig type. The validator accepted it; whether the settings UI shows a toggle was not checked.

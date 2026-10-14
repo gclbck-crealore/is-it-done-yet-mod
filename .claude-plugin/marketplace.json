@@ -1,0 +1,26 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "is-it-done-yet",
+  "description": "A Claude Code mod: a docked progress pane that reads your project's plan file (or the agent's task list) and shows percent done, phases, tasks, time, tokens and API cost.",
+  "owner": {
+    "name": "gclbck-crealore",
+    "url": "https://github.com/gclbck-crealore"
+  },
+  "plugins": [
+    {
+      "name": "is-it-done-yet",
+      "source": "./is-it-done-yet",
+      "description": "A progress pane beside the Claude Code terminal for big, multi-phase work. Open it in any existing project and it reads the project's plan file (PLAN.md, ROADMAP.md, TODO.md, docs/superpowers/plans, checkbox lists or status tables) or the agent's task list, then shows overall percent, an accordion of phases and tasks with green/blue/grey bars, elapsed time, a rough ETA, total tokens and the API-equivalent cost. Adds nothing to the model's context. Reach L1: reads plan files inside the project folder and the transcript's task calls; no processes, environment variables or network.",
+      "category": "productivity",
+      "tags": [
+        "mods",
+        "progress",
+        "plan",
+        "tasks",
+        "pane",
+        "cost",
+        "tokens"
+      ]
+    }
+  ]
+}
